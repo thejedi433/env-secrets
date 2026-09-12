@@ -449,3 +449,92 @@ class TestScannerExceptionPaths:
         with patch('subprocess.run', side_effect=Exception("Git not available")):
             findings = scanner.scan_git_history()
             assert findings == []
+
+    def test_scan_git_history_with_empty_filepath(self, tmp_path):
+        """Test scan_git_history skips empty filepaths and non-env files (lines 105, 108->103)."""
+        os.chdir(tmp_path)
+        subprocess.run(['git', 'init'], check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test'], check=True, capture_output=True)
+        
+        # Create a commit with .env file
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=***")
+        main_file = tmp_path / "main.py"
+        main_file.write_text("print('hello')")
+        subprocess.run(['git', 'add', '.env', 'main.py'], check=True, capture_output=True)
+        subprocess.run(['git', 'commit', '-m', 'Add files'], check=True, capture_output=True)
+        
+        # Mock diff-tree to return .env, empty line, and a non-env file (main.py)
+        original_run = subprocess.run
+        call_count = {'diff_tree': 0, 'show': 0}
+        
+        def mock_diff_tree(*args, **kwargs):
+            if args[0] and 'diff-tree' in args[0]:
+                call_count['diff_tree'] += 1
+                # .env (matches), empty line (skipped), main.py (doesn't match -> 108->103)
+                mock_result = type('MockResult', (), {
+                    'stdout': '.env\n\nmain.py\n',
+                    'returncode': 0,
+                    'stderr': ''
+                })()
+                return mock_result
+            elif args[0] and 'show' in args[0]:
+                call_count['show'] += 1
+                # For the .env file, return the secret content
+                if '.env' in args[0][-1]:
+                    return type('MockResult', (), {
+                        'stdout': 'API_KEY=***',
+                        'returncode': 0,
+                        'stderr': ''
+                    })()
+                # For main.py, should not be called (filtered at line 108)
+                return type('MockResult', (), {
+                    'stdout': '',
+                    'returncode': 0,
+                    'stderr': ''
+                })()
+            return original_run(*args, **kwargs)
+        
+        with patch('subprocess.run', side_effect=mock_diff_tree):
+            findings = scanner.scan_git_history()
+            # Should process the .env file and skip empty + non-env file
+            assert call_count['diff_tree'] > 0
+            # main.py should not trigger git show
+            assert call_count['show'] == 1  # only .env
+
+    def test_scan_git_history_with_deleted_file(self, tmp_path):
+        """Test scan_git_history handles deleted env files (line 118->103)."""
+        os.chdir(tmp_path)
+        subprocess.run(['git', 'init'], check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test'], check=True, capture_output=True)
+        
+        # Create initial commit with .env
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=***")
+        subprocess.run(['git', 'add', '.env'], check=True, capture_output=True)
+        subprocess.run(['git', 'commit', '-m', 'Add .env'], check=True, capture_output=True)
+        
+        # Mock diff-tree and git show: git show returns non-zero (file deleted)
+        original_run = subprocess.run
+        def mock_run(*args, **kwargs):
+            if args[0] and 'diff-tree' in args[0]:
+                return type('MockResult', (), {
+                    'stdout': '.env\n',
+                    'returncode': 0,
+                    'stderr': ''
+                })()
+            elif args[0] and 'show' in args[0]:
+                # File was deleted at this commit
+                return type('MockResult', (), {
+                    'stdout': '',
+                    'returncode': 1,
+                    'stderr': 'fatal: path .env does not exist'
+                })()
+            return original_run(*args, **kwargs)
+        
+        with patch('subprocess.run', side_effect=mock_run):
+            findings = scanner.scan_git_history()
+            # Should not crash, deleted file is skipped
+            assert findings == []
