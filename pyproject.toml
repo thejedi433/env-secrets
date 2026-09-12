@@ -1,0 +1,47 @@
+[project]
+name = "env-secrets"
+version = "0.1.0"
+description = "Encrypt/decrypt .env files with age, scan for uncommitted secrets"
+authors = [
+    { name = "thejedi433", email = "thejedi433@outlook.com" }
+]
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "pyrage>=1.4.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+env-secrets = "env_secrets.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/env_secrets"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+source = ["env_secrets"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
